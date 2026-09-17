@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"><title>{{ document.title }}</title>
+<style>
+@page { size: A4; margin: 18mm 16mm; @bottom-right { content: "Page " counter(page) " / " counter(pages); color: #64748b; font-size: 9px; } }
+* { box-sizing: border-box; } body { font-family: DejaVu Sans, Arial, sans-serif; color: #1e293b; font-size: 10px; line-height: 1.45; margin: 0; }
+h1 { color: #0f172a; font-size: 24px; margin: 0; } h2 { color: #0f172a; font-size: 12px; margin: 22px 0 8px; text-transform: uppercase; letter-spacing: .06em; }
+.header { border-bottom: 3px solid #2563eb; padding-bottom: 13px; } .grid { display: table; width: 100%; } .main, .side, .cell { display: table-cell; vertical-align: top; } .side { text-align: right; width: 38%; }
+.eyebrow, .label { color: #64748b; font-size: 8px; font-weight: bold; letter-spacing: .1em; text-transform: uppercase; } .badge { background: #dbeafe; border-radius: 12px; color: #1d4ed8; display: inline-block; font-size: 9px; font-weight: bold; padding: 4px 9px; text-transform: uppercase; }
+.meta { color: #475569; } .meta-grid { display: table; width: 100%; margin-top: 15px; } .cell { width: 50%; padding: 7px 10px 7px 0; } .value { color: #0f172a; font-weight: bold; }
+table { border-collapse: collapse; width: 100%; } .items { margin-top: 8px; } .items thead { display: table-header-group; } .items tr { page-break-inside: avoid; }
+.items th { background: #eff6ff; border-bottom: 1px solid #93c5fd; color: #1e3a8a; font-size: 8px; padding: 8px 7px; text-align: left; text-transform: uppercase; } .items td { border-bottom: 1px solid #e2e8f0; padding: 8px 7px; vertical-align: top; } .items tbody tr:nth-child(even) { background: #f8fafc; }
+.num { text-align: right !important; white-space: nowrap; } .empty { color: #64748b; font-style: italic; text-align: center; } .summary-wrap { margin-top: 18px; text-align: right; } .summary { display: inline-table; min-width: 270px; width: 44%; }
+.summary td { border-bottom: 1px solid #e2e8f0; padding: 6px 9px; } .summary td:last-child { text-align: right; white-space: nowrap; } .summary .total td { background: #1d4ed8; color: white; font-size: 12px; font-weight: bold; padding: 10px 9px; } .footer { color: #64748b; font-size: 8px; margin-top: 22px; }
+</style>
+</head>
+<body>
+<section class="header"><div class="grid"><div class="main"><div class="eyebrow">Document commercial</div><h1>FACTURE N° {{ document.document_id }}</h1></div><div class="side"><span class="badge">{{ document.status }}</span></div></div>
+<div class="meta-grid"><div class="cell"><span class="label">Client</span><span class="value">{{ document.client.name }}</span>{% if document.client.tax_id %}<br><span class="meta">MF / Tax ID : {{ document.client.tax_id }}</span>{% endif %}</div><div class="cell"><span class="label">Dates</span><span class="value">Emission : {{ document.invoice_date }}</span><br><span class="meta">Echeance : {{ document.due_date }}</span></div></div></section>
+<h2>Detail des articles et prestations</h2>
+<table class="items"><thead><tr><th>#</th><th>Ref / Produit</th><th>Designation</th><th class="num">Qte</th><th class="num">P.U. HT ({{ document.currency }})</th><th class="num">Remise</th><th class="num">Total net HT ({{ document.currency }})</th></tr></thead><tbody>
+{% for item in document["items"] %}<tr><td>{{ item.line }}</td><td>{{ item.product_id or "-" }}</td><td>{{ item.name }}</td><td class="num">{{ item.quantity|number }}</td><td class="num">{{ item.unit_price|money }}</td><td class="num">{% if item.discount_pct %}{{ item.discount_pct|number }}%{% else %}-{% endif %}</td><td class="num">{{ item.line_net_ht|money }}</td></tr>{% else %}<tr><td class="empty" colspan="7">Aucun article specifie</td></tr>{% endfor %}
+</tbody></table>
+<div class="summary-wrap"><table class="summary"><tbody><tr><td>Total brut HT</td><td>{{ document.financials.total_brut_ht|money }}</td></tr><tr><td>Total remises</td><td>-{{ document.financials.total_remises|money }}</td></tr><tr><td>Total net HT</td><td>{{ document.financials.total_net_ht|money }}</td></tr><tr><td>TVA ({{ document.financials.tax_rate|number }}%)</td><td>{{ document.financials.total_tva|money }}</td></tr>{% if document.financials.timbre_fiscal %}<tr><td>Timbre fiscal</td><td>{{ document.financials.timbre_fiscal|money3 }}</td></tr>{% endif %}<tr class="total"><td>TOTAL TTC A PAYER</td><td>{{ document.financials.total_ttc|money }}</td></tr></tbody></table></div>
+<p class="footer">Conditions de reglement : {{ document.payment_terms }} - Document genere par WIND ERP Assistant Agentique</p>
+</body></html>
