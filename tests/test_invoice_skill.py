@@ -132,14 +132,9 @@ def test_chat_invoice_lifecycle():
     })
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "approval_required"
-    token = data["approval_token"]
-
-    appr_resp = client.post(f"/v1/approvals/{token}")
-    assert appr_resp.status_code == 200
-    appr_data = appr_resp.json()
-    assert appr_data["status"] == "completed"
-    doc_id = appr_data["doc_id"]
+    assert data["status"] == "completed"
+    assert data["approval_token"] is None
+    doc_id = data["doc_id"]
     assert doc_id is not None
 
     # Summary lookup

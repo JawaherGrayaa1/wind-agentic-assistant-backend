@@ -580,7 +580,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
     return [
         SkillTool(
             name="create_bon_de_commande",
-            description="Create a new Bon de Commande (Purchase/Sales Order) with client name, line items, and financial tax/discount calculation. Requires approval.",
+            description="Create a new Bon de Commande (Purchase/Sales Order) with client name, line items, and financial tax/discount calculation.",
             parameters={
                 "client_name": "string",
                 "items": "array",
@@ -589,7 +589,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
                 "order_id": "string",
             },
             handler=create_bon_de_commande,
-            requires_confirmation=True,
+            requires_confirmation=False,
         ),
         SkillTool(
             name="list_bon_de_commandes",
@@ -604,7 +604,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
         ),
         SkillTool(
             name="add_order_item",
-            description="Add a new line item or product to an existing Bon de Commande. Checks catalog price and stock if product_id is given. Requires approval.",
+            description="Add a new line item or product to an existing Bon de Commande. Checks catalog price and stock if product_id is given.",
             parameters={
                 "order_id": "string",
                 "product_id": "string",
@@ -614,7 +614,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
                 "discount_pct": "number",
             },
             handler=add_order_item,
-            requires_confirmation=True,
+            requires_confirmation=False,
         ),
         SkillTool(
             name="update_order_item",
@@ -652,9 +652,9 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
         ),
         SkillTool(
             name="export_bon_de_commande_pdf",
-            description="Export a Bon de Commande into a formatted PDF document with company layout, table grid, and financial summary box. Requires approval.",
+            description="Export a Bon de Commande into a formatted PDF document with company layout, table grid, and financial summary box.",
             parameters={"order_id": "string", "output_path": "string"},
             handler=export_bon_de_commande_pdf,
-            requires_confirmation=True,
+            requires_confirmation=False,
         ),
     ]

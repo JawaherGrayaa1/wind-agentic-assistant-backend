@@ -218,14 +218,9 @@ def test_agent_auto_tracks_invoice_entity(tmp_path):
     rt = make_runtime(tmp_path)
     session_id = "mt-inv-sess"
 
-    # Turn 1: create invoice (needs approval)
+    # Turn 1: create invoice (no confirmation needed)
     res1 = rt.run(session_id, "u1", "Créer une facture pour Client Test")
-    assert res1["status"] == "approval_required"
-    token = res1["approval_token"]
-
-    # Approve
-    res_approved = rt.approve(token)
-    assert res_approved["status"] == "completed"
+    assert res1["status"] == "completed"
 
     # Session entity should now hold active_invoice_id
     state = rt.db.get_session_state(session_id)
@@ -238,10 +233,9 @@ def test_agent_multi_turn_follow_up_no_explicit_id(tmp_path):
     rt = make_runtime(tmp_path)
     session_id = "mt-follow-up"
 
-    # Turn 1: create and approve invoice
+    # Turn 1: create invoice
     res1 = rt.run(session_id, "u1", "Créer une facture pour Société Beta")
-    assert res1["status"] == "approval_required"
-    rt.approve(res1["approval_token"])
+    assert res1["status"] == "completed"
 
     inv_id = rt.db.get_session_state(session_id).get("active_invoice_id")
     assert inv_id is not None
@@ -261,8 +255,7 @@ def test_agent_bc_entity_tracked_after_creation(tmp_path):
     session_id = "mt-bc-sess"
 
     res1 = rt.run(session_id, "u1", "Créer un bon de commande pour Fournisseur XYZ")
-    assert res1["status"] == "approval_required"
-    rt.approve(res1["approval_token"])
+    assert res1["status"] == "completed"
 
     state = rt.db.get_session_state(session_id)
     bc_id = state.get("active_bc_id")
@@ -270,18 +263,13 @@ def test_agent_bc_entity_tracked_after_creation(tmp_path):
 
 
 def test_export_it_to_pdf_multi_turn(tmp_path):
-    """Test the exact user scenario: create invoice -> approve -> 'export it to pdf'."""
+    """Test the exact user scenario: create invoice -> 'export it to pdf'."""
     rt = make_runtime(tmp_path)
     session_id = "sess-export-pdf-followup"
 
     # Turn 1: create invoice for TechCorp
     res1 = rt.run(session_id, "u1", "Crée une facture pour TechCorp avec 4 PC Portable à 1600 DT")
-    assert res1["status"] == "approval_required"
-    token = res1["approval_token"]
-
-    # Turn 2: approve creation
-    res_appr = rt.approve(token)
-    assert res_appr["status"] == "completed"
+    assert res1["status"] == "completed"
     inv_id = rt.db.get_session_state(session_id).get("active_invoice_id")
     assert inv_id is not None
     assert inv_id.startswith("INV-")
@@ -292,4 +280,3 @@ def test_export_it_to_pdf_multi_turn(tmp_path):
     assert res3.get("file_url") is not None or "INV-" in res3["reply"]
     trace_tools = [t for t in res3.get("trace", []) if t.get("type") == "tool_call"]
     assert any(t.get("tool") == "export_invoice_pdf" for t in trace_tools)
-

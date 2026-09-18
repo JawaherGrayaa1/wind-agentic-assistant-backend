@@ -8,7 +8,7 @@ from .config import Settings
 from .db import Database
 from .document_editor import SmartDocumentEditor
 from .memory import Memory
-from .planner import OllamaPlanner, RulePlanner
+from .planner import OllamaPlanner, Plan, RulePlanner, normalize_tool_name
 from .tools import ToolRegistry
 
 
@@ -51,6 +51,13 @@ class AgentRuntime:
             # Fallback to rule-based planner if remote model is unreachable/returns error
             plan = self.fallback_planner.plan(text, context, self.tools.descriptions(), skills=skills)
             trace.append({"type": "warning", "summary": f"Remote planner error ({exc}), fell back to rule planner."})
+        normalized_tool_name = normalize_tool_name(plan.tool_name)
+        if normalized_tool_name and normalized_tool_name not in self.tools.tools:
+            trace.append({"type": "warning", "summary": f"Planner returned unknown tool '{normalized_tool_name}'; treated as conversation."})
+            normalized_tool_name = None
+        if normalized_tool_name != plan.tool_name:
+            plan = Plan(plan.intent, plan.reply, normalized_tool_name, plan.arguments, plan.summary)
+
         if plan.summary:
             trace.append({"type": "thought", "summary": plan.summary})
         self.db.add_event(session_id, "plan", {"intent": plan.intent, "summary": plan.summary})
@@ -172,6 +179,12 @@ class AgentRuntime:
                 updates["active_product_id"] = result["product_id"]
             elif isinstance(result.get("product"), dict) and result["product"].get("product_id"):
                 updates["active_product_id"] = result["product"]["product_id"]
+            elif isinstance(result.get("products"), list) and len(result["products"]) == 1:
+                # A unique catalog result is a safe follow-up target. Keep
+                # ambiguous searches from overwriting the active product.
+                product = result["products"][0]
+                if isinstance(product, dict) and product.get("product_id"):
+                    updates["active_product_id"] = product["product_id"]
             elif args.get("product_id"):
                 updates["active_product_id"] = args["product_id"]
 

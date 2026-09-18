@@ -256,13 +256,13 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
         description="Export an ERP document to PDF; commercial JSON documents use their Jinja2/WeasyPrint template.",
             parameters={"doc_id": "string", "output_path": "string"},
             handler=export_document_to_pdf,
-            requires_confirmation=True,
+            requires_confirmation=False,
         ),
         SkillTool(
             name="merge_pdfs",
             description="Merge multiple PDF files into a single destination PDF file.",
             parameters={"file_paths": "array", "output_path": "string"},
             handler=merge_pdfs,
-            requires_confirmation=True,
+            requires_confirmation=False,
         ),
     ]

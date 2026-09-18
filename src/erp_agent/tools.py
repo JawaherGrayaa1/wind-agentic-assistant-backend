@@ -38,23 +38,23 @@ class ToolRegistry:
                 {"query": "string"}, self.search_products
             ),
             "create_product": Tool(
-                "create_product", "Create a new product in the catalog with initial stock and price. Requires user approval.",
+                "create_product", "Create a new product in the catalog with initial stock and price.",
                 {"product_id": "string", "name": "string", "stock": "integer", "price": "number"},
-                self.create_product, True
+                self.create_product, False
             ),
             "update_product_stock": Tool(
-                "update_product_stock", "Update stock level, price, or name for an existing product. Requires user approval.",
+                "update_product_stock", "Update stock level, price, or name for an existing product. This edits existing data and requires confirmation.",
                 {"product_id": "string", "stock": "integer", "price": "number", "name": "string"},
                 self.update_product_stock, True
             ),
             "create_sales_order": Tool(
                 "create_sales_order", "Create a sales order for a customer.",
                 {"customer_id": "string", "items": "array"},
-                self.create_sales_order, True
+                self.create_sales_order, False
             ),
             "remember_fact": Tool(
                 "remember_fact", "Save an explicit user preference or fact.",
-                {"key": "string", "value": "string"}, self.remember_fact, True
+                {"key": "string", "value": "string"}, self.remember_fact, False
             ),
             "get_document": Tool(
                 "get_document", "Retrieve a document by its ID (e.g. DOC-101).",
@@ -66,9 +66,9 @@ class ToolRegistry:
             ),
             "create_document": Tool(
                 "create_document",
-                "Create a new document (invoice, quote, contract, purchase order, etc). Requires user approval.",
+                "Create a new document (invoice, quote, contract, purchase order, etc.). Creation is safe to execute without confirmation.",
                 {"title": "string", "doc_type": "string", "content": "string", "doc_id": "string"},
-                self.create_document, True
+                self.create_document, False
             ),
             "edit_document": Tool(
                 "edit_document",

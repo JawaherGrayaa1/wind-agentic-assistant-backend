@@ -21,22 +21,15 @@ def test_chat_inventory_query():
     assert data["status"] == "completed"
     assert "Laptop Pro" in data["reply"] or "12" in data["reply"]
 
-def test_chat_write_order_requires_approval():
+def test_chat_create_order_runs_without_approval():
     response = client.post(
         "/v1/chat",
         json={"session_id": "test-session-2", "user_id": "user-1", "text": "Create order for customer"}
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "approval_required"
-    assert data["approval_token"] is not None
-
-    token = data["approval_token"]
-    appr_res = client.post(f"/v1/approvals/{token}")
-    assert appr_res.status_code == 200
-    appr_data = appr_res.json()
-    assert appr_data["status"] == "completed"
-    assert appr_data["approval_token"] == token
+    assert data["status"] == "completed"
+    assert data["approval_token"] is None
 
 def test_session_events():
     session_id = "test-session-3"
@@ -152,4 +145,3 @@ def test_download_export_file(tmp_path):
 
     # Clean up
     test_file.unlink(missing_ok=True)
-

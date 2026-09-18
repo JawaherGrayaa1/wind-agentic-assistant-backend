@@ -168,15 +168,11 @@ class TestAgentBonDeCommandeInteraction:
         settings = Settings(database_path=db_path, planner="rules")
         agent = AgentRuntime(settings)
 
-        # 1. Ask agent to create Bon de Commande (requires approval)
+        # 1. Ask agent to create Bon de Commande (no confirmation needed)
         create_res = agent.run("s-bc", "user-1", "Crée un bon de commande BC-900 pour Société Tunisienne")
-        assert create_res["status"] == "approval_required"
-        token = create_res["approval_token"]
-
-        # 2. Approve creation
-        appr_res = agent.approve(token)
-        assert appr_res["status"] == "completed"
-        assert "BC-900" in appr_res["message"]
+        assert create_res["status"] == "completed"
+        assert create_res["approval_token"] is None
+        assert "BC-900" in create_res["reply"]
 
         # 3. Ask agent to calculate/show summary
         sum_res = agent.run("s-bc", "user-1", "Affiche le total du bon de commande BC-900")

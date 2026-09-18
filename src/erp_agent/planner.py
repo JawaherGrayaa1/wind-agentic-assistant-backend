@@ -16,6 +16,16 @@ class Plan:
     arguments: dict[str, Any] | None = None
     summary: str = ""
 
+
+def normalize_tool_name(tool_name: str | None) -> str | None:
+    """Convert LLM no-tool sentinels into the nullable internal value."""
+    if tool_name is None:
+        return None
+    normalized = str(tool_name).strip()
+    if normalized.lower() in {"", "none", "null", "no_tool", "no-tool", "n/a"}:
+        return None
+    return normalized
+
 def _extract_items_from_text(text: str) -> list[dict[str, Any]]:
     """Extract line items and quantities from natural language phrases like '2 laptops and 1 mouse'."""
     items: list[dict[str, Any]] = []
@@ -57,6 +67,21 @@ def _extract_items_from_text(text: str) -> list[dict[str, Any]]:
     return items
 
 
+def _is_product_creation_request(text: str) -> bool:
+    """Recognize catalog-product creation before document/financial routing."""
+    lower = text.lower()
+    action = r"(?:create|new|add|ajouter|ajoute|créer|crée|cree|nouveau|nouvelle|nouveaux|nouvelles|générer|generer)"
+    product = r"(?:produit|produits|product|products|article|articles)"
+    document_target = (
+        r"(?:facture|invoice|facturation|bon\s+de\s+commande|purchase\s+order|"
+        r"commande|document|devis|quote|contrat|contract)"
+    )
+    return bool(
+        re.search(rf"\b{action}\b(?:\s+(?:des?|les?|un|une|a|the|some))?\s+{product}\b", lower, re.I)
+        and not re.search(rf"\b(?:à|a|to|dans|sur|in|on)\s+(?:la|le|les|a|an|the)?\s*{document_target}\b", lower, re.I)
+    )
+
+
 class RulePlanner:
     """Predictable bootstrap planner; replace with an LLM planner later."""
 
@@ -90,10 +115,14 @@ class RulePlanner:
         bc_id = bc_id_match.group(0).upper().replace(" ", "-") if bc_id_match else active_bc_id
 
         # --- Product Creation / Update / Details (Catalog) ---
-        if any(word in lower for word in ("create product", "new product", "créer produit", "nouveau produit", "ajouter produit", "add product")):
+        # Keep this ahead of invoice/document routing so plural French forms
+        # such as "créer des produits" cannot fall through to create_document.
+        if _is_product_creation_request(text):
             pid_match = product_id.group(0).upper().replace(" ", "-") if product_id else f"P-{uuid.uuid4().hex[:4].upper()}" if 'uuid' in dir() else f"P-999"
             name_match = re.search(r"(?:nom|name|titre)[:\s]+'?([^',]+)'?", text, re.I)
-            p_name = name_match.group(1).strip() if name_match else "Nouveau Produit"
+            p_name = name_match.group(1).strip() if name_match else (
+                "Random Product" if any(k in lower for k in ("random", "aléatoire", "mock", "test")) else "Nouveau Produit"
+            )
             stk_match = re.search(r"(?:stock|qté|quantité|qty)[:\s]+(\d+)", text, re.I)
             p_stock = int(stk_match.group(1)) if stk_match else 0
             price_match = re.search(r"(?:prix|price|pu)[:\s]+([\d.]+)", text, re.I)
@@ -617,6 +646,7 @@ class OllamaPlanner:
             "- summary must be a short user-safe explanation.\n"
             "- Use tool_name only when a listed tool is appropriate. Do not invent tools.\n"
             "- Ensure tool arguments strictly match the tool definition.\n"
+            "- Confirmation policy: trust each tool's requires_confirmation field. Creating products, invoices, orders, and documents does not require confirmation; deleting or editing existing records may require it. Never replace a catalog-product request with a generic document or invoice tool.\n"
             "- CRITICAL CONTEXT RESOLUTION: When the user refers to previous items or uses pronouns (e.g. 'export it to pdf', 'export to pdf', 'cette facture', 'ce bon', 'it', 'add 2 more', 'update stock', 'validate it'), "
             "you MUST resolve target IDs from context['session_entities']:\n"
             "  * active_invoice_id (e.g. 'INV-xxxx') -> use tool export_invoice_pdf, validate_invoice, duplicate_invoice, get_invoice_summary, delete_invoice\n"
@@ -638,7 +668,9 @@ class OllamaPlanner:
         
         recent_history = ""
         if context.get("messages"):
-            recent_turns = context["messages"][-4:]
+            # Keep enough turns for references such as "les produits" or
+            # "the invoice we just created" to survive UI messages.
+            recent_turns = context["messages"][-8:]
             recent_history = "\n".join(f"{m.get('role', 'user').upper()}: {m.get('content', '')}" for m in recent_turns)
 
         tools_json = json.dumps(tools, ensure_ascii=False, indent=2)
@@ -687,7 +719,7 @@ class OllamaPlanner:
             raw_json = json_match.group(1) if json_match else content.strip()
             data = json.loads(raw_json)
 
-            tool_name = data.get("tool_name") or data.get("action") or data.get("tool")
+            tool_name = normalize_tool_name(data.get("tool_name") or data.get("action") or data.get("tool"))
             arguments = data.get("arguments") or data.get("parameters") or data.get("params") or data.get("args") or {}
             intent = data.get("intent")
             if not intent:
@@ -707,10 +739,17 @@ class OllamaPlanner:
             # When the LLM picks a generic file/xlsx tool for a query that clearly maps
             # to a deterministic ERP tool (e.g. get_inventory, list_invoices), override it.
             _GENERIC_FILE_TOOLS = {"read_xlsx", "export_to_excel", "read_document"}
-            if tool_name in _GENERIC_FILE_TOOLS:
+            if tool_name in _GENERIC_FILE_TOOLS or _is_product_creation_request(text):
                 rule_plan = RulePlanner()._eval_plan(text, context, tools)
                 if rule_plan.tool_name and rule_plan.tool_name not in _GENERIC_FILE_TOOLS and (not valid_tool_names or rule_plan.tool_name in valid_tool_names):
-                    log_llm_response("Planner (Semantic Override — generic tool suppressed)", {"llm_tool": tool_name, "rule_tool": rule_plan.tool_name}, start_time)
+                    if tool_name in _GENERIC_FILE_TOOLS:
+                        log_llm_response("Planner (Semantic Override — generic tool suppressed)", {"llm_tool": tool_name, "rule_tool": rule_plan.tool_name}, start_time)
+                        return rule_plan
+                # Product creation is a high-confidence catalog intent. This
+                # corrects choices such as add_invoice_item or create_document
+                # for "ajouter/créer des produits".
+                if _is_product_creation_request(text) and rule_plan.tool_name == "create_product" and tool_name != "create_product":
+                    log_llm_response("Planner (Semantic Override — product intent)", {"llm_tool": tool_name, "rule_tool": rule_plan.tool_name}, start_time)
                     return rule_plan
 
 

@@ -942,7 +942,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
     return [
         SkillTool(
             name="create_invoice",
-            description="Create a new invoice with client info, items, tax calculations, and Markdown formatting. Requires confirmation.",
+            description="Create a new invoice with client info, items, tax calculations, and Markdown formatting.",
             parameters={
                 "client_name": "string",
                 "client_tax_id": "string",
@@ -955,7 +955,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
                 "currency": "string",
             },
             handler=create_invoice,
-            requires_confirmation=True,
+            requires_confirmation=False,
         ),
         SkillTool(
             name="get_invoice_summary",
@@ -977,7 +977,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
         ),
         SkillTool(
             name="add_invoice_item",
-            description="Add a product or service line to an existing invoice. Requires confirmation.",
+            description="Add a product or service line to an existing invoice.",
             parameters={
                 "invoice_id": "string",
                 "name": "string",
@@ -987,7 +987,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
                 "product_id": "string",
             },
             handler=add_invoice_item,
-            requires_confirmation=True,
+            requires_confirmation=False,
         ),
         SkillTool(
             name="update_invoice_item",
@@ -1018,21 +1018,21 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
         ),
         SkillTool(
             name="validate_invoice",
-            description="Validate legal/accounting rules of an invoice and set its status to approved. Requires confirmation.",
+            description="Validate legal/accounting rules of an invoice and set its status to approved.",
             parameters={"invoice_id": "string"},
             handler=validate_invoice,
-            requires_confirmation=True,
+            requires_confirmation=False,
         ),
         SkillTool(
             name="duplicate_invoice",
-            description="Duplicate an existing invoice for a new client or period. Requires confirmation.",
+            description="Duplicate an existing invoice for a new client or period.",
             parameters={
                 "invoice_id": "string",
                 "new_client_name": "string",
                 "new_invoice_id": "string",
             },
             handler=duplicate_invoice,
-            requires_confirmation=True,
+            requires_confirmation=False,
         ),
         SkillTool(
             name="delete_invoice",
