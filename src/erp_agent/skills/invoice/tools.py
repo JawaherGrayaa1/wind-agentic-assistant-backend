@@ -265,6 +265,17 @@ def parse_invoice_markdown(content: str) -> dict[str, Any]:
     }
 
 
+def recalculate_invoice_financials(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Recalculate an invoice while preserving its saved financial settings."""
+    saved_financials = parsed.get("financials") or {}
+    return calculate_invoice_financials(
+        parsed.get("items", []),
+        tax_rate=float(saved_financials.get("tax_rate", 19.0)),
+        global_discount_pct=float(saved_financials.get("global_discount_pct", 0.0)),
+        currency=saved_financials.get("currency") or parsed.get("currency") or "TND",
+    )
+
+
 def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillTool]:
     """Registers financial and compliance tools for Invoice management."""
 
@@ -365,7 +376,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
             return {"found": False, "error": f"Facture {invoice_id} introuvable."}
 
         parsed = parse_invoice_markdown(doc["content"])
-        fin = calculate_invoice_financials(parsed["items"])
+        fin = recalculate_invoice_financials(parsed)
 
         return {
             "found": True,
@@ -411,7 +422,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
             "discount_pct": float(discount_pct),
         })
 
-        fin = calculate_invoice_financials(parsed["items"])
+        fin = recalculate_invoice_financials(parsed)
         new_md = format_invoice_json(
             invoice_id=invoice_id,
             client_name=parsed["client_name"],
@@ -479,7 +490,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
         if discount_pct is not None:
             it["discount_pct"] = float(discount_pct)
 
-        fin = calculate_invoice_financials(items)
+        fin = recalculate_invoice_financials(parsed)
         new_md = format_invoice_json(
             invoice_id=invoice_id,
             client_name=parsed["client_name"],
@@ -498,6 +509,77 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
             "financials": fin,
             "document": updated_doc,
             "message": f"Ligne #{target_idx + 1} mise à jour dans la facture {invoice_id}. Nouveau Total TTC : {fin['total_ttc']} TND.",
+        }
+
+    def update_invoice(
+        invoice_id: str,
+        client_name: str | None = None,
+        new_item_name: str | None = None,
+        currency: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Update invoice-level details from a confirmed conversational follow-up."""
+        if not db:
+            return {"found": False, "error": "Database not available"}
+
+        doc = db.get_document(invoice_id)
+        if not doc:
+            return {"found": False, "error": f"Facture {invoice_id} introuvable."}
+
+        parsed = parse_invoice_markdown(doc["content"])
+        old_client = parsed["client_name"]
+        old_currency = (parsed.get("financials") or {}).get("currency", "TND")
+        changes: list[str] = []
+
+        if client_name:
+            parsed["client_name"] = client_name
+            changes.append(f"client = {client_name}")
+
+        if new_item_name:
+            target = next(
+                (item for item in parsed["items"] if "device" in str(item.get("name", "")).lower()),
+                parsed["items"][0] if parsed["items"] else None,
+            )
+            if target is None:
+                return {"found": False, "error": f"Aucune ligne à renommer dans la facture {invoice_id}."}
+            old_name = target.get("name", "Article")
+            target["name"] = new_item_name
+            changes.append(f"article = {new_item_name}")
+
+        selected_currency = (currency or old_currency).upper()
+        if currency:
+            changes.append(f"devise = {selected_currency}")
+
+        financials = parsed.get("financials") or {}
+        fin = calculate_invoice_financials(
+            parsed["items"],
+            tax_rate=float(financials.get("tax_rate", 19.0)),
+            global_discount_pct=float(financials.get("global_discount_pct", 0.0)),
+            currency=selected_currency,
+        )
+        new_content = format_invoice_json(
+            invoice_id=invoice_id,
+            client_name=parsed["client_name"],
+            client_tax_id=parsed["client_tax_id"],
+            financials=fin,
+            invoice_date=parsed.get("invoice_date"),
+            due_date=parsed.get("due_date"),
+            payment_terms=parsed.get("payment_terms", "30 jours fin de mois"),
+            status=parsed.get("status", doc["status"]),
+        )
+        updated_doc = db.update_document(
+            invoice_id,
+            content=new_content,
+            title=f"Facture {invoice_id} - {parsed['client_name']}",
+        )
+        return {
+            "found": True,
+            "invoice_id": invoice_id,
+            "doc_id": invoice_id,
+            "client_name": parsed["client_name"],
+            "financials": fin,
+            "document": updated_doc,
+            "message": f"Facture {invoice_id} mise à jour ({'; '.join(changes) or 'aucun changement'}).",
         }
 
     def remove_invoice_item(
@@ -536,7 +618,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
             return {"found": False, "error": f"Ligne d'article introuvable dans la facture {invoice_id}."}
 
         removed = items.pop(target_idx)
-        fin = calculate_invoice_financials(items)
+        fin = recalculate_invoice_financials(parsed)
         new_md = format_invoice_json(
             invoice_id=invoice_id,
             client_name=parsed["client_name"],
@@ -599,7 +681,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
             }
 
         # Compliance passed -> Update status to approved
-        fin = calculate_invoice_financials(items)
+        fin = recalculate_invoice_financials(parsed)
         new_md = format_invoice_json(
             invoice_id=invoice_id,
             client_name=parsed["client_name"],
@@ -645,7 +727,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
             c_name = parsed.get("client_name") or d.get("title", "")
             if client_name and client_name.lower() not in c_name.lower():
                 continue
-            fin = calculate_invoice_financials(parsed.get("items", []))
+            fin = recalculate_invoice_financials(parsed)
             invoices.append({
                 "invoice_id": d["doc_id"],
                 "title": d["title"],
@@ -700,7 +782,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
         target_inv_id = new_invoice_id if new_invoice_id and new_invoice_id.strip() else f"INV-{uuid.uuid4().hex[:6].upper()}"
         target_client = new_client_name or parsed.get("client_name", "Client Inconnu")
 
-        fin = calculate_invoice_financials(parsed.get("items", []))
+        fin = recalculate_invoice_financials(parsed)
         new_md = format_invoice_json(
             invoice_id=target_inv_id,
             client_name=target_client,
@@ -787,7 +869,7 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
             return {"found": False, "error": f"Facture '{invoice_id}' introuvable."}
 
         parsed = parse_invoice_markdown(doc["content"])
-        fin = calculate_invoice_financials(parsed.get("items", []))
+        fin = recalculate_invoice_financials(parsed)
 
         export_dir = Path("data/exports")
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -1002,6 +1084,18 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
                 "discount_pct": "number",
             },
             handler=update_invoice_item,
+            requires_confirmation=True,
+        ),
+        SkillTool(
+            name="update_invoice",
+            description="Update invoice-level details such as the client name, currency, or a line name. Requires confirmation.",
+            parameters={
+                "invoice_id": "string",
+                "client_name": "string",
+                "new_item_name": "string",
+                "currency": "string",
+            },
+            handler=update_invoice,
             requires_confirmation=True,
         ),
         SkillTool(

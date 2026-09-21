@@ -65,6 +65,150 @@ class AgentRuntime:
         if plan.tool_name:
             tool = self.tools.get(plan.tool_name)
             args = plan.arguments or {}
+            precomputed_result: dict[str, Any] | None = None
+            request_lower = text.lower()
+            requests_pdf_export = (
+                any(word in request_lower for word in ("export", "exporter", "download", "print"))
+                and "pdf" in request_lower
+            )
+
+            # The remote planner may intentionally describe a two-step action
+            # as "list the latest order, then export it". The runtime executes
+            # one plan by default, so resolve this explicit export intent here
+            # and execute both safe tools in order.
+            if (
+                plan.tool_name == "list_bon_de_commandes"
+                and (
+                    str(plan.intent or "").lower() in {
+                        "export_purchase_order_pdf",
+                        "export_bon_de_commande_pdf",
+                    }
+                    or requests_pdf_export
+                )
+            ):
+                list_args = {**args, "limit": 1}
+                list_result = tool.handler(**list_args, user_id=user_id)
+                trace.append({
+                    "type": "tool_call",
+                    "tool": "list_bon_de_commandes",
+                    "arguments": list_args,
+                })
+                trace.append({
+                    "type": "tool_result",
+                    "tool": "list_bon_de_commandes",
+                    "result": list_result,
+                })
+                self.db.add_event(
+                    session_id,
+                    "tool_execution",
+                    {"tool": "list_bon_de_commandes", "result": list_result},
+                )
+
+                orders = list_result.get("orders", []) if isinstance(list_result, dict) else []
+                latest_order_id = (
+                    orders[0].get("order_id")
+                    if orders and isinstance(orders[0], dict)
+                    else None
+                )
+                if latest_order_id:
+                    trace.append({
+                        "type": "thought",
+                        "summary": f"Resolved the latest purchase order as {latest_order_id}; exporting it now.",
+                    })
+                    plan = Plan(
+                        plan.intent,
+                        plan.reply,
+                        "export_bon_de_commande_pdf",
+                        {"order_id": latest_order_id},
+                        plan.summary,
+                    )
+                    tool = self.tools.get(plan.tool_name)
+                    args = plan.arguments or {}
+                    precomputed_result = tool.handler(**args, user_id=user_id)
+                    trace.append({
+                        "type": "tool_call",
+                        "tool": "export_bon_de_commande_pdf",
+                        "arguments": args,
+                    })
+                    trace.append({
+                        "type": "tool_result",
+                        "tool": "export_bon_de_commande_pdf",
+                        "result": precomputed_result,
+                    })
+                    self.db.add_event(
+                        session_id,
+                        "tool_execution",
+                        {"tool": "export_bon_de_commande_pdf", "result": precomputed_result},
+                    )
+                else:
+                    precomputed_result = list_result
+
+            if (
+                plan.tool_name == "create_invoice"
+                and (
+                    str(plan.intent or "").lower() in {
+                        "create_invoice_and_export_pdf",
+                        "create_and_export_invoice_pdf",
+                    }
+                    or requests_pdf_export
+                )
+            ):
+                create_args = dict(args)
+                create_result = tool.handler(**create_args, user_id=user_id)
+                trace.append({
+                    "type": "tool_call",
+                    "tool": "create_invoice",
+                    "arguments": create_args,
+                })
+                trace.append({
+                    "type": "tool_result",
+                    "tool": "create_invoice",
+                    "result": create_result,
+                })
+                self.db.add_event(
+                    session_id,
+                    "tool_execution",
+                    {"tool": "create_invoice", "result": create_result},
+                )
+
+                invoice_id = (
+                    create_result.get("invoice_id")
+                    if isinstance(create_result, dict)
+                    else None
+                )
+                if invoice_id:
+                    trace.append({
+                        "type": "thought",
+                        "summary": f"Created invoice {invoice_id}; exporting it now.",
+                    })
+                    plan = Plan(
+                        plan.intent,
+                        plan.reply,
+                        "export_invoice_pdf",
+                        {"invoice_id": invoice_id},
+                        plan.summary,
+                    )
+                    tool = self.tools.get(plan.tool_name)
+                    args = plan.arguments or {}
+                    precomputed_result = tool.handler(**args, user_id=user_id)
+                    trace.append({
+                        "type": "tool_call",
+                        "tool": "export_invoice_pdf",
+                        "arguments": args,
+                    })
+                    trace.append({
+                        "type": "tool_result",
+                        "tool": "export_invoice_pdf",
+                        "result": precomputed_result,
+                    })
+                    self.db.add_event(
+                        session_id,
+                        "tool_execution",
+                        {"tool": "export_invoice_pdf", "result": precomputed_result},
+                    )
+                else:
+                    precomputed_result = create_result
+
             # If doc_id was passed in context and not in arguments, inject it for document tools
             if doc_id and "doc_id" in tool.parameters and not args.get("doc_id"):
                 args["doc_id"] = doc_id
@@ -95,21 +239,44 @@ class AgentRuntime:
                 }
 
             # Execute safe read action immediately
-            result = tool.handler(**args, user_id=user_id)
-            trace.append({"type": "tool_call", "tool": plan.tool_name, "arguments": args})
-            trace.append({"type": "tool_result", "tool": plan.tool_name, "result": result})
-            self.db.add_event(session_id, "tool_execution", {"tool": plan.tool_name, "result": result})
+            if precomputed_result is None:
+                result = tool.handler(**args, user_id=user_id)
+                trace.append({"type": "tool_call", "tool": plan.tool_name, "arguments": args})
+                trace.append({"type": "tool_result", "tool": plan.tool_name, "result": result})
+                self.db.add_event(session_id, "tool_execution", {"tool": plan.tool_name, "result": result})
+            else:
+                result = precomputed_result
 
             # Auto-update active session entities (invoice, bc, product, doc, client)
             self._update_session_entities_from_result(session_id, plan.tool_name, args, result)
 
-            reply, was_llm = self._synthesize_reply(
-                user_text=text,
-                tool_name=plan.tool_name,
-                args=args,
-                result=result,
-                context=context,
-            )
+            # Keep the planner's wording, but do not drop the executed tool
+            # result. Planner replies are often only a heading (for example,
+            # "Here is the most recently created invoice"), so the UI must
+            # receive the actual invoice/list/total as well.
+            planner_reply = (plan.reply or "").strip()
+            if planner_reply and not (isinstance(result, dict) and result.get("found") is False):
+                detail_reply = self._format_deterministic_reply(plan.tool_name, args, result)
+                empty_list = (
+                    isinstance(result, dict)
+                    and any(
+                        key in result and isinstance(result[key], list) and not result[key]
+                        for key in ("invoices", "documents", "orders", "products")
+                    )
+                )
+                if detail_reply and not empty_list:
+                    reply = f"{planner_reply}\n\n{detail_reply}"
+                else:
+                    reply = detail_reply or planner_reply
+                was_llm = True
+            else:
+                reply, was_llm = self._synthesize_reply(
+                    user_text=text,
+                    tool_name=plan.tool_name,
+                    args=args,
+                    result=result,
+                    context=context,
+                )
             if was_llm:
                 trace.append({"type": "thought", "summary": f"Formulated response with LLM from tool '{plan.tool_name}' result."})
 
@@ -117,7 +284,7 @@ class AgentRuntime:
             doc_payload = None
             if isinstance(result, dict) and "document" in result and result["document"]:
                 doc_payload = result["document"]
-                active_doc_id = doc_payload.get("doc_id")
+                active_doc_id = doc_payload.get("doc_id") or doc_payload.get("document_id")
             elif isinstance(result, dict) and "doc_id" in result and result["doc_id"]:
                 active_doc_id = result["doc_id"]
                 doc_payload = self.db.get_document(active_doc_id)
@@ -126,6 +293,11 @@ class AgentRuntime:
                 doc_payload = self.db.get_document(active_doc_id)
 
             file_url, file_name = self._extract_file_export_from_result(result)
+            open_editor_doc_id = None
+            if plan.tool_name == "list_invoices" and isinstance(result, dict):
+                listed_invoices = result.get("invoices") or []
+                if len(listed_invoices) == 1 and isinstance(listed_invoices[0], dict):
+                    open_editor_doc_id = listed_invoices[0].get("invoice_id")
             self.db.add_message(session_id, user_id, "assistant", reply)
             return {
                 "session_id": session_id,
@@ -137,6 +309,7 @@ class AgentRuntime:
                 "document": doc_payload,
                 "file_url": file_url,
                 "file_name": file_name,
+                "open_editor_doc_id": open_editor_doc_id,
             }
 
         reply = plan.reply or "Comment puis-je vous aider avec l'ERP aujourd'hui ?"
@@ -364,6 +537,14 @@ class AgentRuntime:
         if tool_name == "export_invoice_pdf":
             if result.get("found"):
                 return f"📄 Facture **{result.get('invoice_id')}** exportée avec succès en PDF.\nVous pouvez télécharger le fichier ci-dessous."
+            return f"Échec de l'export PDF : {result.get('error', 'Erreur')}"
+
+        if tool_name == "export_bon_de_commande_pdf":
+            if result.get("found"):
+                return (
+                    f"📄 Bon de commande **{result.get('order_id')}** exporté avec succès en PDF.\n"
+                    "Vous pouvez télécharger le fichier ci-dessous."
+                )
             return f"Échec de l'export PDF : {result.get('error', 'Erreur')}"
 
         if tool_name == "get_order_summary":

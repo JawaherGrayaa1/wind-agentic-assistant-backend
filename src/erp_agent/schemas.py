@@ -70,6 +70,7 @@ class ChatResponse(BaseModel):
     document: dict[str, Any] | None = None
     file_url: str | None = None
     file_name: str | None = None
+    open_editor_doc_id: str | None = None
 
 class ApprovalResponse(BaseModel):
     approval_token: str

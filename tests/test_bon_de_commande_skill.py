@@ -47,6 +47,11 @@ class TestFinancialCalculations:
         # TTC = 3850 + 731.5 = 4581.5
         assert res["total_ttc"] == 4581.5
 
+    def test_legacy_non_object_items_do_not_break_calculation(self):
+        res = calculate_financials(["array", {"name": "Desk", "quantity": 2, "unit_price": 100}])
+        assert res["item_count"] == 1
+        assert res["total_ttc"] == 238.0
+
 
 class TestBonDeCommandeTools:
     def test_discovery_and_registration(self, registry):
@@ -74,6 +79,8 @@ class TestBonDeCommandeTools:
         )
         assert res["found"] is True
         assert res["order_id"] == "BC-TEST-01"
+        assert res["doc_id"] == "BC-TEST-01"
+        assert registry.db.get_document("BC-TEST-01") is not None
         assert res["financials"]["item_count"] == 1
         item = res["financials"]["items"][0]
         assert item["name"] == "Laptop Pro"

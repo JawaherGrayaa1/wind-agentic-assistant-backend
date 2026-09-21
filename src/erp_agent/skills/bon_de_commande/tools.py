@@ -21,7 +21,12 @@ def calculate_financials(
     total_brut_ht = 0.0
     total_item_remises = 0.0
 
-    for idx, item in enumerate(items, start=1):
+    for idx, item in enumerate(items or [], start=1):
+        # Older orders may contain a legacy JSON scalar such as "array" or
+        # "required" instead of a line-item object. Ignore those malformed
+        # entries so document listing and editor loading remain available.
+        if not isinstance(item, dict):
+            continue
         name = str(item.get("name") or item.get("product_id") or f"Article #{idx}")
         product_id = item.get("product_id")
         qty = float(item.get("quantity") or item.get("qty") or 1)
@@ -178,15 +183,26 @@ def register_tools(db: Any = None, skill_dir: Path | None = None) -> list[SkillT
             discount_pct=discount_pct,
         )
 
+        document_payload = build_bon_de_commande_payload(saved, financials)
+        document_payload["doc_id"] = order_code
+        db.create_document(
+            doc_id=order_code,
+            title=document_payload["title"],
+            doc_type="purchase_order",
+            content=json.dumps(document_payload, ensure_ascii=False),
+            status="draft",
+        )
+
         return {
             "found": True,
             "order_id": order_code,
+            "doc_id": order_code,
             "client_name": client_name,
             "currency": currency,
             "status": "draft",
             "created_at": saved.get("created_at"),
             "financials": financials,
-            "document": build_bon_de_commande_payload(saved, financials),
+            "document": document_payload,
             "message": f"Bon de commande '{order_code}' créé avec succès pour le client '{client_name}' (Total TTC: {financials['total_ttc']} {currency}).",
         }
 

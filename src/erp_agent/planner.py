@@ -82,6 +82,14 @@ def _is_product_creation_request(text: str) -> bool:
     )
 
 
+def _looks_like_invoice_detail_update(lower_text: str) -> bool:
+    """Recognize a natural-language follow-up to the active invoice."""
+    has_client_update = bool(re.search(r"\b(?:client\s+(?:name\s+)?is|nom\s+du\s+client|change\s+the\s+client|modifier\s+le\s+client)\b", lower_text))
+    has_item_update = bool(re.search(r"\b(?:change|changer|rename|renommer|modifier)\b.*\b(?:device|item|product|article|line|ligne)\b.*\b(?:to|en)\b", lower_text))
+    has_currency_update = bool(re.search(r"\b(?:currency|devise|monnaie)\b.*\b(?:to|en|à)\b\s*[a-z]{3}\b", lower_text))
+    return has_client_update or has_item_update or has_currency_update
+
+
 class RulePlanner:
     """Predictable bootstrap planner; replace with an LLM planner later."""
 
@@ -113,6 +121,38 @@ class RulePlanner:
         target_doc_id = doc_id.group(0).upper().replace("_", "-").replace(" ", "-") if doc_id else active_doc_id or "DOC-101"
         inv_id = inv_id_match.group(0).upper().replace("_", "-").replace(" ", "-") if inv_id_match else active_invoice_id
         bc_id = bc_id_match.group(0).upper().replace(" ", "-") if bc_id_match else active_bc_id
+
+        # Resolve natural-language follow-ups against the invoice created in
+        # the previous turn before generic order/document routing can run.
+        if active_invoice_id and _looks_like_invoice_detail_update(lower):
+            client_match = re.search(
+                r"(?:client\s+name\s+is|client\s+is|nom\s+du\s+client\s+est|client\s*:)\s*([\w][\w ._-]*?)(?:\s+and\s+|\s+et\s+|\s*,\s*|$)",
+                text,
+                re.I,
+            )
+            client_name = client_match.group(1).strip() if client_match else None
+            rename_match = re.search(
+                r"(?:change|rename|modifier|changer)\s+(?:the\s+)?(?:device|item|product|article|line|ligne)\s+(?:to|en)\s+([\w][\w ._-]*?)(?:\s+instead)?\s*$",
+                text,
+                re.I,
+            )
+            new_item_name = rename_match.group(1).strip() if rename_match else None
+            currency_match = re.search(
+                r"(?:currency|devise|monnaie)\s+(?:to|en|à)\s+([A-Za-z]{3})\b",
+                text,
+                re.I,
+            )
+            return Plan(
+                "update_invoice",
+                tool_name="update_invoice",
+                arguments={
+                    "invoice_id": inv_id or active_invoice_id,
+                    "client_name": client_name,
+                    "new_item_name": new_item_name,
+                    "currency": currency_match.group(1).upper() if currency_match else None,
+                },
+                summary=f"Updating invoice {inv_id or active_invoice_id} using the previous turn's context.",
+            )
 
         # --- Product Creation / Update / Details (Catalog) ---
         # Keep this ahead of invoice/document routing so plural French forms
@@ -653,6 +693,8 @@ class OllamaPlanner:
             "  * active_bc_id (e.g. 'BC-xxxx') -> use tool export_bon_de_commande_pdf, get_order_summary, add_order_item\n"
             "  * active_product_id (e.g. 'P-xxx') -> use tool update_product_stock, get_product, get_inventory\n"
             "  * active_doc_id (e.g. 'DOC-xxx') -> use tool export_document_to_pdf, edit_document, get_document."
+            "\n"
+            "- INVOICE FOLLOW-UPS: If active_invoice_id exists and the user supplies a client name or asks to change an invoice item/device, use update_invoice with that active_invoice_id. Never use update_order_item for an invoice follow-up and never invent a BC/PO id."
         )
 
         if skills:
@@ -781,6 +823,19 @@ class OllamaPlanner:
                 if entities.get("active_doc_id"):
                     if not doc_arg or not re.search(r"\bDOC[-_][A-Z0-9]+\b|\bDOC\d+\b", text, re.I):
                         arguments["doc_id"] = entities["active_doc_id"]
+
+            # The remote model can mistake an invoice follow-up for an order
+            # edit. Prefer the deterministic plan when the active session
+            # clearly identifies this as an invoice detail change.
+            if entities.get("active_invoice_id") and _looks_like_invoice_detail_update(text.lower()):
+                rule_plan = RulePlanner()._eval_plan(text, context, tools)
+                if rule_plan.tool_name == "update_invoice":
+                    log_llm_response(
+                        "Planner (Semantic Override — invoice follow-up)",
+                        {"llm_tool": tool_name, "rule_tool": rule_plan.tool_name},
+                        start_time,
+                    )
+                    return rule_plan
 
             log_llm_response("Planner", data, start_time)
             return Plan(

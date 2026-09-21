@@ -202,9 +202,33 @@ def list_documents(
     q: str | None = Query(default=None, description="Optional search query"),
 ) -> list[dict[str, Any]]:
     """List all documents, or search by passing ?q=<term>."""
+    documents = runtime.db.list_documents()
+    known_ids = {str(doc.get("doc_id")) for doc in documents}
+
+    # Purchase orders have historically lived in the orders table. Expose
+    # them through the document-editor contract too, including older orders
+    # created before purchase-order document persistence was added.
+    for order in runtime.db.list_orders(limit=1000):
+        order_id = str(order.get("order_id"))
+        if order_id in known_ids:
+            continue
+        rendered = document_from_database(runtime.db, order_id).model_dump(mode="json")
+        rendered.update({
+            "doc_id": order_id,
+            "doc_type": "purchase_order",
+            "created_at": order.get("created_at"),
+            "updated_at": order.get("created_at"),
+        })
+        documents.append(rendered)
+
     if q:
-        return runtime.db.search_documents(q)
-    return runtime.db.list_documents()
+        needle = q.strip().lower()
+        documents = [
+            doc for doc in documents
+            if needle in " ".join(str(doc.get(key, "")) for key in ("doc_id", "title", "doc_type", "content")).lower()
+        ]
+
+    return sorted(documents, key=lambda doc: str(doc.get("updated_at") or ""), reverse=True)
 
 
 @app.post("/v1/documents", status_code=201)

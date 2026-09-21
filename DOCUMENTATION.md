@@ -345,7 +345,7 @@ updated_at  TEXT
 
 ## 8. REST API
 
-**Base URL:** `http://localhost:8000`  
+**Base URL:** `http://localhost:`  
 **Framework:** FastAPI (auto-docs at `/docs`)
 
 ### Endpoints

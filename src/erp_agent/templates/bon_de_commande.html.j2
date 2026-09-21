@@ -17,7 +17,12 @@ table { border-collapse: collapse; width: 100%; } .items { margin-top: 8px; } .i
 </head>
 <body>
 <section class="header"><div class="grid"><div class="main"><div class="eyebrow">Document commercial</div><h1>BON DE COMMANDE</h1></div><div class="side"><span class="badge">{{ document.status }}</span></div></div>
-<div class="meta-grid"><div class="cell"><span class="label">Numero</span><span class="value">{{ document.document_id }}</span><br><span class="meta">Client : {{ document.client.name }}</span></div><div class="cell"><span class="label">Date</span><span class="value">{{ document.document_date }}</span><br><span class="meta">Devise : {{ document.currency }}</span></div></div></section>
+<div class="meta-grid">
+<div class="cell"><span class="label">Client</span><span class="value">{{ document.client.name }}</span>{% if document.client.tax_id %}<br><span class="meta">MF / Tax ID : {{ document.client.tax_id }}</span>{% endif %}</div>
+<div class="cell"><span class="label">Dates</span><span class="value">Date : {{ document.document_date }}</span><br><span class="meta">Numero : {{ document.document_id }}</span></div>
+<div class="cell"><span class="label">Conditions de reglement</span><span class="value">{{ document.payment_terms or "-" }}</span></div>
+<div class="cell"><span class="label">Devise</span><span class="value">{{ document.currency }}</span></div>
+</div></section>
 <h2>Detail des articles</h2>
 <table class="items"><thead><tr><th>Ref / Produit</th><th>Designation</th><th class="num">Qte</th><th class="num">P.U. HT ({{ document.currency }})</th><th class="num">Remise</th><th class="num">Total net HT ({{ document.currency }})</th></tr></thead><tbody>
 {% for item in document["items"] %}<tr><td>{{ item.product_id or "-" }}</td><td>{{ item.name }}</td><td class="num">{{ item.quantity|number }}</td><td class="num">{{ item.unit_price|money }}</td><td class="num">{% if item.discount_pct %}{{ item.discount_pct|number }}%{% else %}-{% endif %}</td><td class="num">{{ item.line_net_ht|money }}</td></tr>{% else %}<tr><td class="empty" colspan="6">Aucun article specifie</td></tr>{% endfor %}

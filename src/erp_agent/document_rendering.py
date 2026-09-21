@@ -196,16 +196,18 @@ def _fallback_pdf_bytes(document: DocumentSchema | str, cause: Exception) -> byt
     )
 
     story: list[Any] = []
-    if isinstance(document, DocumentSchema) and document.document_type == "invoice":
+    if isinstance(document, DocumentSchema) and document.document_type in {"invoice", "bon_de_commande", "purchase_order"}:
         client = document.client
         financials = document.financials
         currency = text(document.currency, "TND")
+        is_invoice = document.document_type == "invoice"
+        document_label = "FACTURE" if is_invoice else "BON DE COMMANDE"
 
         header = Table([
             [
                 Paragraph(
                     '<font color="#64748b" size="8"><b>DOCUMENT COMMERCIAL</b></font><br/>'
-                    f'<font size="19"><b>FACTURE N. {text(document.document_id)}</b></font>',
+                    f'<font size="19"><b>{document_label} N. {text(document.document_id)}</b></font>',
                     title_style,
                 ),
                 Paragraph(text(document.status, "draft").upper(), status_style),
@@ -237,8 +239,8 @@ def _fallback_pdf_bytes(document: DocumentSchema | str, cause: Exception) -> byt
                 ),
                 Paragraph(
                     f'<font color="#64748b" size="7"><b>DATES</b></font><br/>'
-                    f'<b>Emission : {text(document.invoice_date)}</b><br/>'
-                    f'<font color="#64748b">Echeance : {text(document.due_date)}</font>',
+                    f'<b>Date : {text(document.invoice_date or document.document_date)}</b><br/>'
+                    f'<font color="#64748b">Echeance : {text(document.due_date) if is_invoice else "Commande fournisseur"}</font>',
                     cell_style,
                 ),
             ],
@@ -268,7 +270,8 @@ def _fallback_pdf_bytes(document: DocumentSchema | str, cause: Exception) -> byt
             "FallbackSection", parent=body_style, fontName="Helvetica-Bold",
             fontSize=10, textColor=colors.HexColor("#0f172a"),
         )
-        story.extend([metadata, Spacer(1, 18), Paragraph("DETAIL DES ARTICLES ET PRESTATIONS", section_style), Spacer(1, 6)])
+        section_title = "DETAIL DES ARTICLES ET PRESTATIONS" if is_invoice else "DETAIL DES ARTICLES"
+        story.extend([metadata, Spacer(1, 18), Paragraph(section_title, section_style), Spacer(1, 6)])
 
         item_rows: list[list[Any]] = [[
             Paragraph("#", header_cell_style),
