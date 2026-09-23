@@ -94,6 +94,8 @@ class Database:
                     active_product_id TEXT,
                     active_doc_id TEXT,
                     active_client TEXT,
+                    active_financial_document_id TEXT,
+                    active_financial_document_type TEXT,
                     updated_at TEXT NOT NULL
                 );
             """)
@@ -104,6 +106,11 @@ class Database:
                 db.execute("ALTER TABLE orders ADD COLUMN tax_rate REAL NOT NULL DEFAULT 19.0")
             if "discount_pct" not in order_columns:
                 db.execute("ALTER TABLE orders ADD COLUMN discount_pct REAL NOT NULL DEFAULT 0.0")
+            session_state_columns = {row["name"] for row in db.execute("PRAGMA table_info(session_states)").fetchall()}
+            if "active_financial_document_id" not in session_state_columns:
+                db.execute("ALTER TABLE session_states ADD COLUMN active_financial_document_id TEXT")
+            if "active_financial_document_type" not in session_state_columns:
+                db.execute("ALTER TABLE session_states ADD COLUMN active_financial_document_type TEXT")
             if db.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
                 db.executemany(
                     "INSERT INTO products(product_id,name,stock,price) VALUES (?,?,?,?)",
@@ -148,6 +155,8 @@ class Database:
                 "active_product_id": None,
                 "active_doc_id": None,
                 "active_client": None,
+                "active_financial_document_id": None,
+                "active_financial_document_type": None,
                 "updated_at": utc_now(),
             }
         return dict(row)
@@ -162,14 +171,16 @@ class Database:
 
         with self.connect() as db:
             db.execute(
-                "INSERT INTO session_states(session_id, active_invoice_id, active_bc_id, active_product_id, active_doc_id, active_client, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "INSERT INTO session_states(session_id, active_invoice_id, active_bc_id, active_product_id, active_doc_id, active_client, active_financial_document_id, active_financial_document_type, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(session_id) DO UPDATE SET "
                 "active_invoice_id=excluded.active_invoice_id, "
                 "active_bc_id=excluded.active_bc_id, "
                 "active_product_id=excluded.active_product_id, "
                 "active_doc_id=excluded.active_doc_id, "
                 "active_client=excluded.active_client, "
+                "active_financial_document_id=excluded.active_financial_document_id, "
+                "active_financial_document_type=excluded.active_financial_document_type, "
                 "updated_at=excluded.updated_at",
                 (
                     session_id,
@@ -178,6 +189,8 @@ class Database:
                     current.get("active_product_id"),
                     current.get("active_doc_id"),
                     current.get("active_client"),
+                    current.get("active_financial_document_id"),
+                    current.get("active_financial_document_type"),
                     now,
                 ),
             )

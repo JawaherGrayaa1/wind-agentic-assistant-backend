@@ -10,6 +10,44 @@ def test_health_endpoint():
     assert data["status"] == "ok"
     assert "planner" in data
 
+
+def test_invoice_extraction_proxy_stages_and_cleans_file(monkeypatch):
+    import erp_agent.api as api_module
+
+    captured = {}
+
+    class FakeTool:
+        def handler(self, **kwargs):
+            from pathlib import Path
+
+            captured.update(kwargs)
+            assert Path(kwargs["file_path"]).is_file()
+            return {
+                "found": True,
+                "source": "test-extractor",
+                "invoice_data": {"invoice_id": "FAC-1", "items": []},
+            }
+
+    monkeypatch.setattr(api_module.runtime.tools, "get", lambda name: FakeTool())
+    response = client.post(
+        "/v1/invoices/extract",
+        data={
+            "tenant_id": "wind-erp",
+            "invoice_layout": "auto",
+            "document_id": "DOC-1",
+        },
+        files={"file": ("invoice.png", b"fake-image", "image/png")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["invoice_data"]["invoice_id"] == "FAC-1"
+    assert captured["tenant_id"] == "wind-erp"
+
+    from pathlib import Path
+
+    assert not Path(captured["file_path"]).exists()
+
+
 def test_chat_inventory_query():
     response = client.post(
         "/v1/chat",

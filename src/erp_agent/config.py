@@ -20,6 +20,11 @@ class Settings:
     ollama_timeout: float = float(os.getenv("OLLAMA_TIMEOUT", "180"))
     transcription_normalizer_timeout: float = float(os.getenv("TRANSCRIPTION_NORMALIZER_TIMEOUT", "60"))
     max_agent_steps: int = int(os.getenv("MAX_AGENT_STEPS", "4"))
+    invoice_extractor_url: str = os.getenv("INVOICE_EXTRACTOR_URL", "http://127.0.0.1:8000").rstrip("/")
+    invoice_extractor_timeout: float = float(os.getenv("INVOICE_EXTRACTOR_TIMEOUT", "180"))
+    invoice_extractor_token: str | None = os.getenv("INVOICE_EXTRACTOR_TOKEN") or None
+    invoice_extractor_tenant: str = os.getenv("INVOICE_EXTRACTOR_TENANT", "wind-erp")
+    invoice_extractor_layout: str = os.getenv("INVOICE_EXTRACTOR_LAYOUT", "auto")
 
     def resolved_vosk_model_dir(self) -> Path | None:
         if not self.vosk_model_dir:

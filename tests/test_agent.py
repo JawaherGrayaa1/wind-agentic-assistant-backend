@@ -154,6 +154,86 @@ def test_create_invoice_and_export_chains_both_tools(tmp_path):
     assert result["file_url"]
 
 
+def test_create_purchase_order_from_latest_invoice_chains_all_steps(tmp_path):
+    runtime = make_runtime(tmp_path)
+    source = runtime.tools.get("create_invoice").handler(
+        client_name="jawaher",
+        invoice_id="INV-CHAIN-PO",
+        items=[{"name": "Laptop", "quantity": 2, "unit_price": 1200}],
+        currency="TND",
+    )
+    assert source["found"] is True
+
+    class ChainedPurchaseOrderPlanner:
+        def plan(self, *args, **kwargs):
+            return Plan(
+                intent="create_purchase_order_from_invoice",
+                reply="I will create the purchase order from the latest invoice.",
+                tool_name="list_invoices",
+                arguments={"limit": 1},
+                summary="Find the latest invoice, read its items, then create a purchase order.",
+            )
+
+    runtime.planner = ChainedPurchaseOrderPlanner()
+    result = runtime.run(
+        "s-chain-invoice-po",
+        "u1",
+        "now create a purchase order with the same products as this invoice",
+    )
+    tool_calls = [item for item in result["trace"] if item.get("type") == "tool_call"]
+    assert [item["tool"] for item in tool_calls] == [
+        "list_invoices",
+        "get_invoice_summary",
+        "create_bon_de_commande",
+    ]
+    assert result["status"] == "completed"
+    assert result["doc_id"].startswith("BC-")
+    assert result["document"]["document_type"] == "bon_de_commande"
+    assert result["document"]["items"][0]["name"] == "Laptop"
+
+
+def test_remote_planner_can_choose_a_follow_up_tool(tmp_path):
+    runtime = AgentRuntime(Settings(
+        database_path=str(tmp_path / "test.db"),
+        planner="ollama",
+    ))
+
+    class FlexiblePlanner:
+        def plan(self, text, context, tools, skills=None):
+            history = context.get("tool_history") or []
+            if not history:
+                return Plan(
+                    intent="catalog_lookup_workflow",
+                    tool_name="create_product",
+                    arguments={
+                        "product_id": "P-FLEX-01",
+                        "name": "Flexible Product",
+                        "stock": 3,
+                        "price": 25,
+                    },
+                    summary="Create the product before looking it up.",
+                )
+            if len(history) == 1:
+                return Plan(
+                    intent="catalog_lookup_workflow",
+                    tool_name="get_product",
+                    arguments={"product_id": "P-FLEX-01"},
+                    summary="Now retrieve the created product.",
+                )
+            return Plan(
+                intent="catalog_lookup_workflow",
+                tool_name=None,
+                summary="Workflow complete.",
+            )
+
+    runtime.planner = FlexiblePlanner()
+    runtime._synthesize_reply = lambda **kwargs: ("Workflow complete.", False)
+    result = runtime.run("s-flexible-chain", "u1", "create and then inspect a product")
+    tool_calls = [item for item in result["trace"] if item.get("type") == "tool_call"]
+    assert [item["tool"] for item in tool_calls] == ["create_product", "get_product"]
+    assert result["status"] == "completed"
+
+
 def test_invoice_follow_up_uses_active_invoice_not_purchase_order(tmp_path):
     runtime = make_runtime(tmp_path)
     created = runtime.run("s-invoice-follow-up", "u1", "create invoice for Acme")
@@ -189,3 +269,23 @@ def test_invoice_listing_preserves_saved_discount_and_total(tmp_path):
     listed = runtime.tools.get("list_invoices").handler(limit=1)
     assert listed["invoices"][0]["invoice_id"] == "INV-DISCOUNT"
     assert listed["invoices"][0]["total_ttc"] == 7617.0
+
+
+def test_file_modality_routes_images_to_ocr_and_pdfs_to_pdf_reader():
+    image_plan = Plan(
+        intent="read_document",
+        tool_name="read_pdf",
+        arguments={"file_path": r"C:	empscanned-invoice.webp"},
+    )
+    image_routed = AgentRuntime._enforce_file_modality(image_plan)
+    assert image_routed.tool_name == "extract_invoice_from_file"
+    assert image_routed.arguments["file_path"].endswith("scanned-invoice.webp")
+
+    pdf_plan = Plan(
+        intent="read_document",
+        tool_name="extract_invoice_from_file",
+        arguments={"file_path": r"C:	empinvoice.pdf"},
+    )
+    pdf_routed = AgentRuntime._enforce_file_modality(pdf_plan)
+    assert pdf_routed.tool_name == "read_pdf"
+    assert pdf_routed.arguments["file_path"].endswith("invoice.pdf")

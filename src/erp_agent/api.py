@@ -72,6 +72,116 @@ def chat(request: ChatRequest) -> dict:
     return runtime.run(request.session_id, request.user_id, request.text, doc_id=request.doc_id)
 
 
+@app.post("/v1/invoices/extract")
+async def extract_invoice(
+    file: UploadFile = File(...),
+    tenant_id: str = Form(default=settings.invoice_extractor_tenant),
+    invoice_layout: str = Form(default=settings.invoice_extractor_layout),
+    document_id: str | None = Form(default=None),
+    force_langue: str | None = Form(default=None),
+    debug: bool = Form(default=False),
+) -> dict[str, Any]:
+    """Proxy invoice OCR requests to the configured local extractor service."""
+    suffix = Path(file.filename or ".bin").suffix or ".bin"
+    fd, path = tempfile.mkstemp(prefix="invoice-", suffix=suffix)
+    os.close(fd)
+    try:
+        with open(path, "wb") as output:
+            output.write(await file.read())
+        result = runtime.tools.get("extract_invoice_from_file").handler(
+            file_path=path,
+            tenant_id=tenant_id,
+            invoice_layout=invoice_layout,
+            document_id=document_id,
+            force_langue=force_langue,
+            debug=debug,
+        )
+        if result.get("found") is False:
+            raise HTTPException(status_code=502, detail=result)
+        return result
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+async def _extract_specialized_document(
+    file: UploadFile,
+    tool_name: str,
+    tenant_id: str,
+    document_id: str | None = None,
+    bank_layout: str | None = None,
+    debug: bool = False,
+) -> dict[str, Any]:
+    """Proxy a specialized WIND financial-document extraction endpoint."""
+    suffix = Path(file.filename or ".bin").suffix or ".bin"
+    fd, path = tempfile.mkstemp(prefix="financial-document-", suffix=suffix)
+    os.close(fd)
+    try:
+        with open(path, "wb") as output:
+            output.write(await file.read())
+        result = runtime.tools.get(tool_name).handler(
+            file_path=path,
+            tenant_id=tenant_id,
+            bank_layout=bank_layout,
+            document_id=document_id,
+            debug=debug,
+        )
+        if result.get("found") is False:
+            raise HTTPException(status_code=502, detail=result)
+        return result
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+@app.post("/v1/bank-statements/extract")
+async def extract_bank_statement(
+    file: UploadFile = File(...),
+    tenant_id: str = Form(default=settings.invoice_extractor_tenant),
+    bank_layout: str = Form(default="auto"),
+    document_id: str | None = Form(default=None),
+    debug: bool = Form(default=False),
+) -> dict[str, Any]:
+    return await _extract_specialized_document(
+        file=file,
+        tool_name="extract_bank_statement_from_file",
+        tenant_id=tenant_id,
+        bank_layout=bank_layout,
+        document_id=document_id,
+        debug=debug,
+    )
+
+
+@app.post("/v1/cheques/extract")
+async def extract_cheque(
+    file: UploadFile = File(...),
+    tenant_id: str = Form(default=settings.invoice_extractor_tenant),
+    document_id: str | None = Form(default=None),
+    debug: bool = Form(default=False),
+) -> dict[str, Any]:
+    return await _extract_specialized_document(
+        file=file,
+        tool_name="extract_cheque_from_file",
+        tenant_id=tenant_id,
+        document_id=document_id,
+        debug=debug,
+    )
+
+
+@app.post("/v1/bills-of-exchange/extract")
+async def extract_bill_of_exchange(
+    file: UploadFile = File(...),
+    tenant_id: str = Form(default=settings.invoice_extractor_tenant),
+    document_id: str | None = Form(default=None),
+    debug: bool = Form(default=False),
+) -> dict[str, Any]:
+    return await _extract_specialized_document(
+        file=file,
+        tool_name="extract_bill_of_exchange_from_file",
+        tenant_id=tenant_id,
+        document_id=document_id,
+        debug=debug,
+    )
+
+
 @app.post("/v1/chat/upload", response_model=ChatResponse)
 async def chat_with_document_upload(
     file: UploadFile = File(...),
@@ -80,6 +190,11 @@ async def chat_with_document_upload(
     user_id: str = Form(default="anonymous"),
     title: str | None = Form(default=None),
     doc_type: str = Form(default="general"),
+    extract_invoice: bool = Form(default=False),
+    extract_document_type: str | None = Form(default=None),
+    tenant_id: str = Form(default=settings.invoice_extractor_tenant),
+    invoice_layout: str = Form(default=settings.invoice_extractor_layout),
+    force_langue: str | None = Form(default=None),
 ) -> dict:
     """Uploads a document (PDF/text/markdown), saves it to the database, and processes prompt instructions on it."""
     file_bytes = await file.read()
@@ -97,16 +212,81 @@ async def chat_with_document_upload(
     )
     new_doc_id = saved_doc["doc_id"]
 
-    # 2. If prompt instruction given, execute agent against this document
-    prompt_text = text.strip()
-    if prompt_text:
-        agent_prompt = f"In document {new_doc_id} ('{doc_title}'): {prompt_text}"
-        res = runtime.run(session_id, user_id, agent_prompt, doc_id=new_doc_id)
-        res["doc_id"] = new_doc_id
-        res["document"] = runtime.db.get_document(new_doc_id) or saved_doc
-        return res
+    # 2. Preserve the original binary when a file-backed reader is needed.
+    # PDFs go to read_pdf; raster invoice images go to the OCR extractor.
+    # The binary itself is never sent to the remote planner.
+    upload_suffix = Path(filename).suffix.lower()
+    is_pdf_upload = upload_suffix == ".pdf"
+    is_raster_upload = upload_suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+    request_lower = text.strip().lower()
+    requested_document_type = (extract_document_type or doc_type or "").strip().lower()
+    specialized_tool = None
+    if any(word in requested_document_type or word in request_lower for word in ("bank_statement", "bank statement", "releve bancaire", "relevé bancaire", "statement", "كشف حساب")):
+        specialized_tool = "extract_bank_statement_from_file"
+    elif any(word in requested_document_type or word in request_lower for word in ("bill_of_exchange", "bill of exchange", "lettre de change", "traite", "سفتجة", "كمبيالة")):
+        specialized_tool = "extract_bill_of_exchange_from_file"
+    elif any(word in requested_document_type or word in request_lower for word in ("cheque", "chèque", "check", "شيك")):
+        specialized_tool = "extract_cheque_from_file"
+    is_invoice_request = (
+        doc_type.lower() == "invoice"
+        or any(word in request_lower for word in ("invoice", "facture", "facturation", "فاتورة"))
+    )
+    is_file_read_request = any(
+        word in request_lower
+        for word in ("read", "lire", "open", "parse", "extract", "scan", "ocr", "table", "content")
+    )
+    should_stage_file = (
+        (is_pdf_upload or is_raster_upload)
+        and (is_invoice_request or specialized_tool or is_file_read_request or extract_invoice)
+    )
+    staged_file_path: str | None = None
+    if should_stage_file:
+        suffix = Path(filename).suffix or ".bin"
+        fd, staged_file_path = tempfile.mkstemp(prefix="uploaded-", suffix=suffix)
+        os.close(fd)
+        with open(staged_file_path, "wb") as output:
+            output.write(file_bytes)
 
-    # 3. If no extra prompt given, return document confirmation for frontend editor
+    # 3. If prompt instruction given, execute agent against this document
+    prompt_text = text.strip()
+    if staged_file_path:
+        file_context = f"file_path={staged_file_path}"
+        if specialized_tool:
+            if specialized_tool == "extract_bank_statement_from_file":
+                action_hint = "Use extract_bank_statement_from_file to extract this bank statement."
+                file_context += f" tenant_id={tenant_id} bank_layout=auto"
+            elif specialized_tool == "extract_cheque_from_file":
+                action_hint = "Use extract_cheque_from_file to extract this cheque."
+                file_context += f" tenant_id={tenant_id}"
+            else:
+                action_hint = "Use extract_bill_of_exchange_from_file to extract this bill of exchange."
+                file_context += f" tenant_id={tenant_id}"
+        elif is_raster_upload:
+            file_context += f" tenant_id={tenant_id} invoice_layout={invoice_layout}"
+            if force_langue:
+                file_context += f" force_langue={force_langue}"
+            action_hint = "Use extract_invoice_from_file to OCR and extract the invoice fields."
+        else:
+            action_hint = "Use read_pdf to read the uploaded PDF; do not use OCR."
+        prompt_text = f"{file_context}. {action_hint} {prompt_text}".strip()
+        if not text.strip():
+            prompt_text = f"{file_context}. {action_hint}"
+
+    if prompt_text:
+        try:
+            agent_prompt = f"In document {new_doc_id} ('{doc_title}'): {prompt_text}"
+            res = runtime.run(session_id, user_id, agent_prompt, doc_id=new_doc_id)
+            res["doc_id"] = new_doc_id
+            res["document"] = runtime.db.get_document(new_doc_id) or saved_doc
+            return res
+        finally:
+            if staged_file_path:
+                Path(staged_file_path).unlink(missing_ok=True)
+
+    if staged_file_path:
+        Path(staged_file_path).unlink(missing_ok=True)
+
+    # 4. If no extra prompt given, return document confirmation for frontend editor
     reply_msg = f"Document '{doc_title}' ({new_doc_id}) téléchargé et enregistré avec succès. Vous pouvez maintenant le modifier dans l'éditeur."
     runtime.db.add_message(session_id, user_id, "assistant", reply_msg)
     return {

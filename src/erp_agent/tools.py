@@ -6,8 +6,12 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .db import Database, utc_now
+from .config import settings
+from .document_extraction import SpecializedDocumentExtractionClient
 from .document_editor import SmartDocumentEditor
+from .invoice_extraction import InvoiceExtractionClient
 from .skills import SkillLoader
+from .web_scraper import WebScraper
 
 
 @dataclass(frozen=True)
@@ -23,6 +27,17 @@ class ToolRegistry:
     def __init__(self, db: Database, editor: SmartDocumentEditor | None = None):
         self.db = db
         self.editor = editor or SmartDocumentEditor()
+        self.invoice_extractor = InvoiceExtractionClient(
+            base_url=settings.invoice_extractor_url,
+            timeout=settings.invoice_extractor_timeout,
+            api_token=settings.invoice_extractor_token,
+        )
+        self.document_extractor = SpecializedDocumentExtractionClient(
+            base_url=settings.invoice_extractor_url,
+            timeout=settings.invoice_extractor_timeout,
+            api_token=settings.invoice_extractor_token,
+        )
+        self.web_scraper = WebScraper(timeout=min(settings.invoice_extractor_timeout, 30.0))
         self.skill_loader = SkillLoader()
         self.tools = {
             "get_inventory": Tool(
@@ -63,6 +78,70 @@ class ToolRegistry:
             "search_documents": Tool(
                 "search_documents", "Search documents by title, type, or content.",
                 {"query": "string"}, self.search_documents
+            ),
+            "extract_invoice_from_file": Tool(
+                "extract_invoice_from_file",
+                "Run OCR/vision extraction on a local image through the WIND Invoice Extraction service.",
+                {
+                    "file_path": "string",
+                    "tenant_id": "string",
+                    "invoice_layout": "string",
+                    "document_id": "string",
+                    "force_langue": "string",
+                    "debug": "boolean",
+                },
+                self.extract_invoice_from_file,
+                False,
+            ),
+            "extract_bank_statement_from_file": Tool(
+                "extract_bank_statement_from_file",
+                "Extract a bank statement PDF or image through the WIND bank statement extraction service.",
+                {
+                    "file_path": "string",
+                    "tenant_id": "string",
+                    "bank_layout": "string",
+                    "document_id": "string",
+                    "debug": "boolean",
+                },
+                self.extract_bank_statement_from_file,
+                False,
+            ),
+            "extract_cheque_from_file": Tool(
+                "extract_cheque_from_file",
+                "Extract a cheque PDF or image through the WIND cheque extraction service.",
+                {
+                    "file_path": "string",
+                    "tenant_id": "string",
+                    "document_id": "string",
+                    "debug": "boolean",
+                },
+                self.extract_cheque_from_file,
+                False,
+            ),
+            "extract_bill_of_exchange_from_file": Tool(
+                "extract_bill_of_exchange_from_file",
+                "Extract a bill of exchange PDF or image through the WIND bill-of-exchange extraction service.",
+                {
+                    "file_path": "string",
+                    "tenant_id": "string",
+                    "document_id": "string",
+                    "debug": "boolean",
+                },
+                self.extract_bill_of_exchange_from_file,
+                False,
+            ),
+            "scrape_web_dashboard": Tool(
+                "scrape_web_dashboard",
+                "Fetch a public web page or dashboard, extract readable text and tables, then let the LLM produce the requested report or summary.",
+                {
+                    "url": "string",
+                    "report_request": "string",
+                    "max_chars": "integer",
+                    "max_table_rows": "integer",
+                    "allow_private_network": "boolean",
+                },
+                self.scrape_web_dashboard,
+                False,
             ),
             "create_document": Tool(
                 "create_document",
@@ -156,6 +235,93 @@ class ToolRegistry:
                 (f"%{query}%", f"%{query}%")
             ).fetchall()
         return {"products": [dict(row) for row in rows]}
+
+    def extract_invoice_from_file(
+        self,
+        file_path: str,
+        tenant_id: str | None = None,
+        invoice_layout: str | None = None,
+        document_id: str | None = None,
+        force_langue: str | None = None,
+        debug: bool = False,
+        **_: Any,
+    ) -> dict[str, Any]:
+        """Extract an invoice through the configured local/container service."""
+        return self.invoice_extractor.extract(
+            file_path=file_path,
+            tenant_id=tenant_id or settings.invoice_extractor_tenant,
+            invoice_layout=invoice_layout or settings.invoice_extractor_layout,
+            document_id=document_id,
+            force_langue=force_langue,
+            debug=bool(debug),
+        )
+
+    def extract_bank_statement_from_file(
+        self,
+        file_path: str,
+        tenant_id: str | None = None,
+        bank_layout: str | None = None,
+        document_id: str | None = None,
+        debug: bool = False,
+        **_: Any,
+    ) -> dict[str, Any]:
+        return self.document_extractor.extract(
+            document_type="bank_statement",
+            file_path=file_path,
+            tenant_id=tenant_id or settings.invoice_extractor_tenant,
+            bank_layout=bank_layout,
+            document_id=document_id,
+            debug=bool(debug),
+        )
+
+    def extract_cheque_from_file(
+        self,
+        file_path: str,
+        tenant_id: str | None = None,
+        document_id: str | None = None,
+        debug: bool = False,
+        **_: Any,
+    ) -> dict[str, Any]:
+        return self.document_extractor.extract(
+            document_type="cheque",
+            file_path=file_path,
+            tenant_id=tenant_id or settings.invoice_extractor_tenant,
+            document_id=document_id,
+            debug=bool(debug),
+        )
+
+    def extract_bill_of_exchange_from_file(
+        self,
+        file_path: str,
+        tenant_id: str | None = None,
+        document_id: str | None = None,
+        debug: bool = False,
+        **_: Any,
+    ) -> dict[str, Any]:
+        return self.document_extractor.extract(
+            document_type="bill_of_exchange",
+            file_path=file_path,
+            tenant_id=tenant_id or settings.invoice_extractor_tenant,
+            document_id=document_id,
+            debug=bool(debug),
+        )
+
+    def scrape_web_dashboard(
+        self,
+        url: str,
+        report_request: str = "",
+        max_chars: int = 12_000,
+        max_table_rows: int = 100,
+        allow_private_network: bool = False,
+        **_: Any,
+    ) -> dict[str, Any]:
+        return self.web_scraper.scrape(
+            url=url,
+            report_request=report_request,
+            max_chars=max_chars,
+            max_table_rows=max_table_rows,
+            allow_private_network=bool(allow_private_network),
+        )
 
     def create_sales_order(self, customer_id: str, items: list[dict[str, Any]], **_: Any) -> dict[str, Any]:
         order_id = f"SO-{uuid.uuid4().hex[:8].upper()}"
